@@ -113,7 +113,7 @@ function resolveForTopSourceSide(source, target, nextInLine) {
         return Directions.LEFT;
     }
 
-    return Directions.TOP;
+    return Directions.BOTTOM;
 }
 
 function resolveForBottomSourceSide(source, target, nextInLine) {
@@ -153,7 +153,7 @@ function resolveForBottomSourceSide(source, target, nextInLine) {
         return Directions.LEFT;
     }
 
-    return Directions.BOTTOM;
+    return Directions.TOP;
 }
 
 function resolveForLeftSourceSide(source, target, nextInLine) {
@@ -187,7 +187,7 @@ function resolveForLeftSourceSide(source, target, nextInLine) {
         return Directions.TOP;
     }
 
-    return Directions.LEFT;
+    return Directions.RIGHT;
 }
 
 function resolveForRightSourceSide(source, target, nextInLine) {
@@ -221,7 +221,7 @@ function resolveForRightSourceSide(source, target, nextInLine) {
         return Directions.TOP;
     }
 
-    return Directions.RIGHT;
+    return Directions.LEFT;
 }
 
 function resolveInitialDirection(source, target, nextInLine) {
@@ -326,6 +326,118 @@ function getOutsidePoint(side, pointData, margin) {
     return outsidePoint;
 }
 
+function loopSegment(from, to, connectionSegmentAngle, margin) {
+    // Find out the loop coordinates.
+    const angle = g.normalizeAngle(connectionSegmentAngle - 90);
+
+    let dx = 0;
+    let dy = 0;
+
+    if (angle === 90) {
+        dy = -margin;
+    } else if (angle === 180) {
+        dx = -margin;
+    } else if (angle === 270) {
+        dy = margin;
+    } else if (angle === 0) {
+        dx = margin;
+    }
+
+    const p1 = { x: from.point.x + dx, y: from.point.y + dy };
+    const p2 = { x: to.point.x + dx, y: to.point.y + dy };
+
+    const loopEndSegment = new g.Line(to.point, p2);
+    // The direction in which the loop should continue.
+    const continueDirection = ANGLE_DIRECTION_MAP[getSegmentAngle(loopEndSegment)];
+
+    return {
+        loopRoute: [from.point, p1, p2, to.point],
+        continueDirection
+    };
+}
+
+// Calculates the distances along the horizontal axis for the left and right route.
+function getHorizontalDistance(source, target) {
+
+    const { x0: sx0, x1: sx1, outsidePoint: sourcePoint } = source;
+    const { x0: tx0, x1: tx1, outsidePoint: targetPoint } = target;
+
+    // Furthest left boundary
+    let leftBoundary = Math.min(sx0, tx0);
+    // Furthest right boundary
+    let rightBoundary = Math.max(sx1, tx1);
+
+    // If the source and target elements are on the same side, we need to figure out what shape defines the boundary.
+    if (source.direction === target.direction) {
+
+        const aboveShape = source.y0 < target.y0 ? source : target;
+        const belowShape = aboveShape === source ? target : source;
+
+        // The source and target anchors are on the top => then the `aboveShape` defines the boundary.
+        // The source and target anchors are on the bottom => then the `belowShape` defines the boundary.
+        const boundaryDefiningShape = source.direction === Directions.TOP ? aboveShape : belowShape;
+
+        leftBoundary = boundaryDefiningShape.x0;
+        rightBoundary = boundaryDefiningShape.x1;
+    }
+
+    const { x: sox } = sourcePoint;
+    const { x: tox } = targetPoint;
+
+    // Calculate the distances for the left route
+    const leftDistance1 = Math.abs(sox - leftBoundary);
+    const leftDistance2 = Math.abs(tox - leftBoundary);
+    const leftD = leftDistance1 + leftDistance2;
+
+    // Calculate the distances for the right route
+    const rightDistance1 = Math.abs(sox - rightBoundary);
+    const rightDistance2 = Math.abs(tox - rightBoundary);
+    const rightD = rightDistance1 + rightDistance2;
+
+    return [leftD, rightD];
+}
+
+// Calculates the distances along the vertical axis for the top and bottom route.
+function getVerticalDistance(source, target) {
+
+    const { y0: sy0, y1: sy1, outsidePoint: sourcePoint } = source;
+    const { y0: ty0, y1: ty1, outsidePoint: targetPoint } = target;
+
+    // Furthest top boundary
+    let topBoundary = Math.min(sy0, ty0);
+    // Furthest bottom boundary
+    let bottomBoundary = Math.max(sy1, ty1);
+
+    // If the source and target elements are on the same side, we need to figure out what shape defines the boundary.
+    if (source.direction === target.direction) {
+
+        const leftShape = source.x0 < target.x0 ? source : target;
+        const rightShape = leftShape === source ? target : source;
+
+        // The source and target anchors are on the left => then the `leftShape` defines the boundary.
+        // The source and target anchors are on the right => then the `rightShape` defines the boundary.
+        const boundaryDefiningShape = source.direction === Directions.LEFT ? leftShape : rightShape;
+
+        topBoundary = boundaryDefiningShape.y0;
+        bottomBoundary = boundaryDefiningShape.y1;  
+    }
+
+    const { y: soy } = sourcePoint;
+    const { y: toy } = targetPoint;
+
+    // Calculate the distances for the top route
+    const topDistance1 = Math.abs(soy - topBoundary);
+    const topDistance2 = Math.abs(toy - topBoundary);
+    const topD = topDistance1 + topDistance2;
+
+    // Calculate the distances for the bottom route
+    const bottomDistance1 = Math.abs(soy - bottomBoundary);
+    const bottomDistance2 = Math.abs(toy - bottomBoundary);
+    const bottomD = bottomDistance1 + bottomDistance2;
+
+    return [topD, bottomD];
+}
+
 function routeBetweenPoints(source, target, opt = {}) {
     const { point: sourcePoint, x0: sx0, y0: sy0, width: sourceWidth, height: sourceHeight, margin: sourceMargin } = source;
     const { point: targetPoint, x0: tx0, y0: ty0, width: targetWidth, height: targetHeight, margin: targetMargin } = target;
@@ -366,16 +478,38 @@ function routeBetweenPoints(source, target, opt = {}) {
     const inflatedSourceBBox = sourceBBox.clone().inflate(sourceMargin);
     const inflatedTargetBBox = targetBBox.clone().inflate(targetMargin);
 
+    const sourceForDistance = Object.assign({}, source, { x1: sx1, y1: sy1, outsidePoint: sourceOutsidePoint, direction: sourceSide });
+    const targetForDistance = Object.assign({}, target, { x1: tx1, y1: ty1, outsidePoint: targetOutsidePoint, direction: targetSide });
+
+    // Distances used to determine the shortest route along the connections on horizontal sides for
+    // bottom => bottom
+    // top => bottom
+    // bottom => top
+    // top => top
+    const [leftD, rightD] = getHorizontalDistance(sourceForDistance, targetForDistance);
+
+    // Distances used to determine the shortest route along the connection on vertical sides for
+    // left => left
+    // left => right
+    // right => right
+    // right => left
+    const [topD, bottomD] = getVerticalDistance(sourceForDistance, targetForDistance);
+
+    // All possible combinations of source and target sides
     if (sourceSide === 'left' && targetSide === 'right') {
-        if (smx0 <= tmx1) {
+        if (sox < tox) {
             let y = middleOfHorizontalSides;
-            if (sox <= tmx0) {
-                if (ty1 >= smy0 && toy < soy) {
+
+            // If the source and target elements overlap, we need to make sure the connection
+            // goes around the target element.
+            if ((y >= smy0 && y <= smy1) || (y >= tmy0 && y <= tmy1)) {
+                if (sy1 >= tmy0 && topD < bottomD) {
                     y = Math.min(tmy0, smy0);
-                } else if (ty0 <= smy1 && toy >= soy) {
+                } else if (sy0 <= tmy1 && topD >= bottomD) {
                     y = Math.max(tmy1, smy1);
                 }
             }
+
             return [
                 { x: sox, y: soy },
                 { x: sox, y },
@@ -387,15 +521,18 @@ function routeBetweenPoints(source, target, opt = {}) {
         const x = (sox + tox) / 2;
         return [
             { x, y: soy },
-            { x, y: toy }
+            { x, y: toy },
         ];
     } else if (sourceSide === 'right' && targetSide === 'left') {
-        if (sox >= tmx0) {
+        if (sox > tox) {
             let y = middleOfHorizontalSides;
-            if (sox > tx1) {
-                if (ty1 >= smy0 && toy < soy) {
+
+            // If the source and target elements overlap, we need to make sure the connection
+            // goes around the target element.
+            if ((y >= smy0 && y <= smy1) || (y >= tmy0 && y <= tmy1)) {
+                if (sy1 >= tmy0 && topD < bottomD) {
                     y = Math.min(tmy0, smy0);
-                } else if (ty0 <= smy1 && toy >= soy) {
+                } else if (sy0 <= tmy1 && topD >= bottomD) {
                     y = Math.max(tmy1, smy1);
                 }
             }
@@ -414,25 +551,22 @@ function routeBetweenPoints(source, target, opt = {}) {
             { x, y: toy }
         ];
     } else if (sourceSide === 'top' && targetSide === 'bottom') {
-        const isPointInsideSource = g.intersection.rectWithRect(inflatedSourceBBox, targetBBox);
-
         if (soy < toy) {
             let x = middleOfVerticalSides;
-            let y = soy;
 
-            if (isPointInsideSource) {
-                y = Math.min(y, tmy0);
-            }
-
-            if (tx1 >= smx0 && tox < sox) {
-                x = Math.min(tmx0, smx0);
-            } else if (tx0 <= smx1 && tox >= sox) {
-                x = Math.max(tmx1, smx1);
+            // If the source and target elements overlap, we need to make sure the connection
+            // goes around the target element.
+            if ((x >= smx0 && x <= smx1) || (x >= tmx0 && x <= tmx1)) {
+                if (sx1 >= tmx0 && leftD < rightD) {
+                    x = Math.min(tmx0, smx0);
+                } else if (sx0 <= tmx1 && leftD >= rightD) {
+                    x = Math.max(tmx1, smx1);
+                }
             }
 
             return [
-                { x: sox, y },
-                { x, y },
+                { x: sox, y: soy },
+                { x, y: soy },
                 { x, y: toy },
                 { x: tox, y: toy }
             ];
@@ -443,20 +577,18 @@ function routeBetweenPoints(source, target, opt = {}) {
             { x: tox, y }
         ];
     } else if (sourceSide === 'bottom' && targetSide === 'top') {
-        const isPointInsideSource = g.intersection.rectWithRect(inflatedSourceBBox, targetBBox);
-
         if (soy > toy) {
             let x = middleOfVerticalSides;
             let y = soy;
 
-            if (isPointInsideSource) {
-                y = Math.max(y, tmy1);
-            }
-
-            if (tx1 >= smx0 && tox < sox) {
-                x = Math.min(tmx0, smx0);
-            } else if (tx0 <= smx1 && tox >= sox) {
-                x = Math.max(tmx1, smx1);
+            // If the source and target elements overlap, we need to make sure the connection
+            // goes around the target element.
+            if ((x >= smx0 && x <= smx1) || (x >= tmx0 && x <= tmx1)) {
+                if (sx1 >= tmx0 && leftD < rightD) {
+                    x = Math.min(tmx0, smx0);
+                } else if (sx0 <= tmx1 && leftD >= rightD) {
+                    x = Math.max(tmx1, smx1);
+                }
             }
 
             return [
@@ -490,16 +622,17 @@ function routeBetweenPoints(source, target, opt = {}) {
         let y2 = Math.min((sy0 + ty1) / 2, soy);
 
         if (toy < soy) {
-            if (tox > sox) {
+            // Use the shortest path along the connections on horizontal sides
+            if (rightD > leftD) {
                 x = Math.min(sox, tmx0);
             } else {
                 x = Math.max(sox, tmx1);
             }
         } else {
-            if (tox >= sox) {
-                x = Math.max(tox, smx1);
-            } else {
+            if (rightD > leftD) {
                 x = Math.min(tox, smx0);
+            } else {
+                x = Math.max(tox, smx1);
             }
         }
 
@@ -528,16 +661,17 @@ function routeBetweenPoints(source, target, opt = {}) {
         let y2 = Math.max((sy1 + ty0) / 2, soy);
 
         if (toy > soy) {
-            if (tox > sox) {
+            // Use the shortest path along the connections on horizontal sides
+            if (rightD > leftD) {
                 x = Math.min(sox, tmx0);
             } else {
                 x = Math.max(sox, tmx1);
             }
         } else {
-            if (tox >= sox) {
-                x = Math.max(tox, smx1);
-            } else {
+            if (rightD > leftD) {
                 x = Math.min(tox, smx0);
+            } else {
+                x = Math.max(tox, smx1);
             }
         }
 
@@ -566,13 +700,13 @@ function routeBetweenPoints(source, target, opt = {}) {
         let x2 = Math.min((sx0 + tx1) / 2, sox);
 
         if (tox > sox) {
-            if (toy <= soy) {
+            if (topD <= bottomD) {
                 y = Math.min(smy0, toy);
             } else {
                 y = Math.max(smy1, toy);
             }
         } else {
-            if (toy >= soy) {
+            if (topD <= bottomD) {
                 y = Math.min(tmy0, soy);
             } else {
                 y = Math.max(tmy1, soy);
@@ -604,13 +738,13 @@ function routeBetweenPoints(source, target, opt = {}) {
         let x2 = Math.max((sx1 + tx0) / 2, sox);
 
         if (tox <= sox) {
-            if (toy <= soy) {
+            if (topD <= bottomD) {
                 y = Math.min(smy0, toy);
             } else {
                 y = Math.max(smy1, toy);
             }
         } else {
-            if (toy >= soy) {
+            if (topD <= bottomD) {
                 y = Math.min(tmy0, soy);
             } else {
                 y = Math.max(tmy1, soy);
@@ -1212,12 +1346,13 @@ function rightAngleRouter(vertices, opt, linkView) {
 
     if (sourcePoint.view && sourcePoint.view.model.isElement() && sourcePoint.view.model.getBBox().inflate(margin).containsPoint(firstVertex.point)) {
         const [fromDirection] = resolveSides(sourcePoint, firstVertex);
-        const toDirection = fromDirection;
         const dummySource = pointDataFromVertex(sourcePoint.point);
         // Points do not usually have margin. Here we create a point with a margin.
         dummySource.margin = margin;
         dummySource.direction = fromDirection;
-        firstVertex.direction = toDirection;
+        // since the first vertex is inside the source element use the `fromDirection`
+        // for the vertex itself to create a U shape connection
+        firstVertex.direction = fromDirection;
 
         resultVertices.push(...routeBetweenPoints(dummySource, firstVertex, { targetInSourceBBox: true }), firstVertex.point);
     } else {
@@ -1233,44 +1368,35 @@ function rightAngleRouter(vertices, opt, linkView) {
         const from = verticesData[i];
         const to = verticesData[i + 1];
 
-        const segment = new g.Line(from.point, to.point);
-        const segmentAngle = getSegmentAngle(segment);
-        if (segmentAngle % 90 === 0) {
-            // Since the segment is horizontal or vertical, we can skip the routing and just connect them with a straight line
-            const toDirection = ANGLE_DIRECTION_MAP[segmentAngle];
-            const accessDirection = OPPOSITE_DIRECTIONS[toDirection];
+        const connectionSegment = new g.Line(from.point, to.point);
+        const connectionSegmentAngle = getSegmentAngle(connectionSegment);
+        if (connectionSegmentAngle % 90 === 0) {
+            // Segment is horizontal or vertical
+            const connectionDirection = ANGLE_DIRECTION_MAP[connectionSegmentAngle];
 
-            if (toDirection !== from.direction) {
+            const simplifiedRoute = simplifyPoints(resultVertices);
+            // Find out the direction that is used to connect the current route with the next vertex
+            const accessSegment = new g.Line(simplifiedRoute[simplifiedRoute.length - 2], from.point);
+            const accessDirection = ANGLE_DIRECTION_MAP[Math.round(getSegmentAngle(accessSegment))];
+
+            if (connectionDirection !== OPPOSITE_DIRECTIONS[accessDirection]) {
+                // The directions are not opposite, so we can connect the vertices directly
                 resultVertices.push(from.point, to.point);
-                to.direction = accessDirection;
+                const [, toDirection] = resolveSides(from, to);
+                to.direction = toDirection;
             } else {
-                const angle = g.normalizeAngle(segmentAngle - 90);
-
-                let dx = 0;
-                let dy = 0;
-
-                if (angle === 90) {
-                    dy = -margin;
-                } else if (angle === 180) {
-                    dx = -margin;
-                } else if (angle === 270) {
-                    dy = margin;
-                } else if (angle === 0) {
-                    dx = margin;
-                }
-
-                const p1 = { x: from.point.x + dx, y: from.point.y + dy };
-                const p2 = { x: to.point.x + dx, y: to.point.y + dy };
-
-                const segment2 = new g.Line(to.point, p2);
-                to.direction = ANGLE_DIRECTION_MAP[getSegmentAngle(segment2)];
-
+                // The directions are overlapping, so we need to create a loop
+                const { loopRoute, continueDirection } = loopSegment(from, to, connectionSegmentAngle, margin);
+                to.direction = continueDirection;
                 // Constructing a loop
-                resultVertices.push(from.point, p1, p2, to.point);
+                resultVertices.push(...loopRoute);
             }
 
             continue;
         }
+
+        // Vertices are not aligned vertically nor horizontally
+        // so we need to route between them
 
         const [fromDirection, toDirection] = resolveDirection(from, to);
 
@@ -1284,13 +1410,14 @@ function rightAngleRouter(vertices, opt, linkView) {
 
     if (targetPoint.view && targetPoint.view.model.isElement()) {
         if (targetPoint.view.model.getBBox().inflate(margin).containsPoint(lastVertex.point)) {
-            const [fromDirection] = resolveDirection(lastVertex, targetPoint);
+            // if the last vertex is inside the target element we need to create a dummy target point
+            // and continue the route from the last vertex to the dummy target point from the opposite direction
             const dummyTarget = pointDataFromVertex(targetPoint.point);
             const [, toDirection] = resolveSides(lastVertex, targetPoint);
             // we are creating a point that has a margin
             dummyTarget.margin = margin;
             dummyTarget.direction = toDirection;
-            lastVertex.direction = fromDirection;
+            lastVertex.direction = OPPOSITE_DIRECTIONS[lastVertex.direction];
 
             resultVertices.push(...routeBetweenPoints(lastVertex, dummyTarget));
         } else {
@@ -1319,10 +1446,42 @@ function rightAngleRouter(vertices, opt, linkView) {
         }
     } else {
         // since the target is only a point we can apply the same logic as if we connected two verticesData
-        const [vertexDirection] = resolveDirection(lastVertex, targetPoint);
-        lastVertex.direction = vertexDirection;
+        const from = lastVertex;
+        const to = targetPoint;
 
-        resultVertices.push(...routeBetweenPoints(lastVertex, targetPoint));
+        const connectionSegment = new g.Line(from.point, to.point);
+        const connectionSegmentAngle = getSegmentAngle(connectionSegment);
+        if (connectionSegmentAngle % 90 === 0) {
+            // Segment is horizontal or vertical
+            const connectionDirection = ANGLE_DIRECTION_MAP[connectionSegmentAngle];
+
+            const simplifiedRoute = simplifyPoints(resultVertices);
+            // Find out the direction that is used to connect the current route with the next vertex
+            const accessSegment = new g.Line(simplifiedRoute[simplifiedRoute.length - 2], from.point);
+            const accessDirection = ANGLE_DIRECTION_MAP[Math.round(getSegmentAngle(accessSegment))];
+
+            if (connectionDirection !== OPPOSITE_DIRECTIONS[accessDirection]) {
+                // The directions are not opposite, so we can connect the vertices directly by adding the first point
+                // the target point is handled separately
+                resultVertices.push(from.point);
+            } else {
+                // The directions are overlapping, so we need to create a loop
+                const { loopRoute } = loopSegment(from, to, connectionSegmentAngle, margin);
+                // Remove the last point since it is the target that is handled separately
+                loopRoute.pop();
+                // Constructing a loop
+                resultVertices.push(...loopRoute);
+            }
+        } else {
+            // The last vertex and the target are not aligned vertically nor horizontally
+            // so we need to route between them
+            const [fromDirection, toDirection] = resolveDirection(from, to);
+
+            from.direction = fromDirection;
+            to.direction = toDirection;
+
+            resultVertices.push(...routeBetweenPoints(from, to));
+        }
     }
 
     return simplifyPoints(resultVertices);
